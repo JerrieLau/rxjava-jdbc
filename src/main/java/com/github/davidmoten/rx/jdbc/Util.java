@@ -1,42 +1,21 @@
 package com.github.davidmoten.rx.jdbc;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.Reader;
-import java.io.StringReader;
-import java.io.Writer;
+import com.github.davidmoten.rx.jdbc.QuerySelect.Builder;
+import com.github.davidmoten.rx.jdbc.exceptions.SQLRuntimeException;
+import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import rx.functions.Func1;
+
+import java.io.*;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.sql.Types;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import org.apache.commons.io.IOUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import rx.functions.Func1;
-
-import com.github.davidmoten.rx.jdbc.QuerySelect.Builder;
-import com.github.davidmoten.rx.jdbc.exceptions.SQLRuntimeException;
+import java.sql.*;
+import java.util.*;
 
 /**
  * Utility methods.
@@ -57,9 +36,8 @@ public final class Util {
 
     /**
      * Count the number of JDBC parameters in a sql statement.
-     * 
-     * @param query
-     *            .sql()
+     *
+     * @param query .sql()
      * @return
      */
     static int parametersCount(Query query) {
@@ -103,7 +81,7 @@ public final class Util {
     /**
      * Cancels then closes a {@link PreparedStatement} and logs exceptions
      * without throwing. Does nothing if ps is null.
-     * 
+     *
      * @param ps
      */
     static void closeQuietly(PreparedStatement ps) {
@@ -138,7 +116,7 @@ public final class Util {
     /**
      * Closes a {@link Connection} and logs exceptions without throwing. Does
      * nothing if connection is null.
-     * 
+     *
      * @param connection
      */
     static void closeQuietly(Connection connection) {
@@ -157,7 +135,7 @@ public final class Util {
     /**
      * Closes a {@link Connection} only if the connection is in auto commit mode
      * and logs exceptions without throwing. Does nothing if connection is null.
-     * 
+     *
      * @param connection
      */
     static boolean closeQuietlyIfAutoCommit(Connection connection) {
@@ -174,7 +152,7 @@ public final class Util {
 
     /**
      * Commits a {@link Connection} and logs exceptions without throwing.
-     * 
+     *
      * @param connection
      */
     static void commit(Connection connection) {
@@ -189,7 +167,7 @@ public final class Util {
 
     /**
      * Rolls back a {@link Connection} and logs exceptions without throwing.
-     * 
+     *
      * @param connection
      */
     static void rollback(Connection connection) {
@@ -204,7 +182,7 @@ public final class Util {
 
     /**
      * Closes a {@link ResultSet} and logs exceptions without throwing.
-     * 
+     *
      * @param rs
      */
     static void closeQuietly(ResultSet rs) {
@@ -222,7 +200,7 @@ public final class Util {
 
     /**
      * Returns true if and only if {@link Connection} is in auto commit mode.
-     * 
+     *
      * @param con
      * @return
      */
@@ -241,7 +219,9 @@ public final class Util {
         @Override
         public List<Parameter> call(Integer n) {
             return Collections.emptyList();
-        };
+        }
+
+        ;
     };
 
     /**
@@ -249,7 +229,7 @@ public final class Util {
      * parameters to the constructor (with number of parameters equals the
      * number of columns) of type <code>cls</code> then returns an instance of
      * type <code>cls</code>. See {@link Builder#autoMap(Class)}.
-     * 
+     *
      * @param cls
      * @return
      */
@@ -267,9 +247,37 @@ public final class Util {
      * (with number of parameters equals the number of columns) of type
      * <code>T</code> then returns an instance of type <code>T</code>. See See
      * {@link Builder#autoMap(Class)}.
-     * 
+     *
      * @param cls
      *            the class of the resultant instance
+     * @return an automapped instance
+     */
+//    @SuppressWarnings("unchecked")
+//    static <T> T autoMap(ResultSet rs, Class<T> cls) {
+//        try {
+//            if (cls.isInterface()) {
+//                return autoMapInterface(rs, cls);
+//            } else {
+//                int n = rs.getMetaData().getColumnCount();
+//                for (Constructor<?> c : cls.getDeclaredConstructors()) {
+//                    if (n == c.getParameterTypes().length) {
+//                        return autoMap(rs, (Constructor<T>) c);
+//                    }
+//                }
+//                throw new RuntimeException("constructor with number of parameters=" + n
+//                        + "  not found in " + cls);
+//            }
+//        } catch (SQLException e) {
+//            throw new SQLRuntimeException(e);
+//        }
+//    }
+
+    /**
+     * Converts the ResultSet column values into parameters to the instance of type
+     * <code>T</code> then returns an instance of type <code>T</code>. See See
+     * {@link Builder#autoMap(Class)}.
+     *
+     * @param cls the class of the resultant instance
      * @return an automapped instance
      */
     @SuppressWarnings("unchecked")
@@ -279,16 +287,31 @@ public final class Util {
                 return autoMapInterface(rs, cls);
             } else {
                 int n = rs.getMetaData().getColumnCount();
-                for (Constructor<?> c : cls.getDeclaredConstructors()) {
-                    if (n == c.getParameterTypes().length) {
-                        return autoMap(rs, (Constructor<T>) c);
+
+                T instance = cls.newInstance();
+                Field[] fields = cls.getDeclaredFields();
+                int fieldLen = fields.length;
+                for (int i = 1; i <= n; i++) {
+                    String colName = rs.getMetaData().getColumnLabel(i);
+                    String methodName = CamelCaseUtils.toCamelCase(colName);
+
+                    for (int j = 0; j < fieldLen; j++) {
+                        Field field = fields[j];
+                        if (field.getName().equals(methodName)) {
+                            field.setAccessible(true);
+                            field.set(instance, getObject(rs, field.getDeclaringClass(), i));
+                            break;
+                        }
                     }
                 }
-                throw new RuntimeException("constructor with number of parameters=" + n
-                        + "  not found in " + cls);
+                return instance;
             }
         } catch (SQLException e) {
             throw new SQLRuntimeException(e);
+        } catch (InstantiationException e) {
+            throw new RuntimeException(e);
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -384,7 +407,7 @@ public final class Util {
         public static <T> T newInstance(ResultSet rs, Class<T> cls) {
 
             return (T) java.lang.reflect.Proxy.newProxyInstance(cls.getClassLoader(),
-                    new Class[] { cls }, new ProxyService<T>(rs, cls));
+                    new Class[]{cls}, new ProxyService<T>(rs, cls));
         }
 
         @Override
@@ -413,11 +436,9 @@ public final class Util {
      * constructor (with number of parameters equals the number of columns) of
      * type <code>T</code> then returns an instance of type <code>T</code>. See
      * See {@link Builder#autoMap(Class)}.
-     * 
-     * @param rs
-     *            the result set row
-     * @param c
-     *            constructor to use for instantiation
+     *
+     * @param rs the result set row
+     * @param c  constructor to use for instantiation
      * @return automapped instance
      */
     private static <T> T autoMap(ResultSet rs, Constructor<T> c) {
@@ -452,7 +473,7 @@ public final class Util {
 
     /**
      * Returns debugging info about the types of a list of objects.
-     * 
+     *
      * @param list
      * @return
      */
@@ -493,11 +514,8 @@ public final class Util {
     }
 
     /**
-     * 
-     * @param c
-     *            constructor to use
-     * @param parameters
-     *            constructor parameters
+     * @param c          constructor to use
+     * @param parameters constructor parameters
      * @return
      */
     @SuppressWarnings("unchecked")
@@ -518,7 +536,7 @@ public final class Util {
     /**
      * Converts from java.sql Types to common java types like java.util.Date and
      * numeric types. See {@link Builder#autoMap(Class)}.
-     * 
+     *
      * @param o
      * @param cls
      * @return
@@ -643,9 +661,8 @@ public final class Util {
 
     /**
      * Returns the bytes of a {@link Blob} and frees the blob resource.
-     * 
-     * @param b
-     *            blob
+     *
+     * @param b blob
      * @return
      */
     private static byte[] toBytes(Blob b) {
@@ -665,7 +682,7 @@ public final class Util {
 
     /**
      * Returns the String of a {@link Clob} and frees the clob resource.
-     * 
+     *
      * @param c
      * @return
      */
@@ -686,7 +703,7 @@ public final class Util {
     /**
      * Automatically frees the blob (<code>blob.free()</code>) once the blob
      * {@link InputStream} is closed.
-     * 
+     *
      * @param blob
      * @param is
      * @return
@@ -717,7 +734,7 @@ public final class Util {
     /**
      * Automatically frees the clob (<code>Clob.free()</code>) once the clob
      * Reader is closed.
-     * 
+     *
      * @param clob
      * @param reader
      * @return
@@ -747,7 +764,7 @@ public final class Util {
 
     /**
      * Sets parameters for the {@link PreparedStatement}.
-     * 
+     *
      * @param ps
      * @param params
      * @throws SQLException
@@ -800,7 +817,7 @@ public final class Util {
 
     /**
      * Sets a blob parameter for the prepared statement.
-     * 
+     *
      * @param ps
      * @param i
      * @param o
@@ -825,7 +842,7 @@ public final class Util {
 
     /**
      * Sets the clob parameter for the prepared statement.
-     * 
+     *
      * @param ps
      * @param i
      * @param o
@@ -850,7 +867,7 @@ public final class Util {
 
     /**
      * Copies a {@link Reader} to a {@link Writer}.
-     * 
+     *
      * @param input
      * @param output
      * @return
@@ -865,7 +882,7 @@ public final class Util {
 
     /**
      * Copies an {@link InputStream} to an {@link OutputStream}.
-     * 
+     *
      * @param input
      * @param output
      * @return
@@ -907,7 +924,7 @@ public final class Util {
     }
 
     public static void setNamedParameters(PreparedStatement ps, List<Parameter> parameters,
-            List<String> names) throws SQLException {
+                                          List<String> names) throws SQLException {
         Map<String, Parameter> map = new HashMap<String, Parameter>();
         for (Parameter p : parameters) {
             if (p.hasName()) {
